@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# TODO Write down your name and studentnumber of the author(s)
-# Markus Persson (1234567) and Rick Games (1000903)
+# Yusuf Bedelci (1051250)
+# Written and tested on Debian 11.6.0
 
 # Global variables
 # TODO Define (only) the variables which require global scope
