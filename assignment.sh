@@ -9,6 +9,7 @@
 
 # Global variables
 # TODO Define (only) the variables which require global scope
+CONFIG_FILE="$HOME/vault.conf"
 ENCRYPTED=0
 
 ###########
@@ -52,12 +53,16 @@ function setup() {
     if [[ -z "$1" ]]; then
         handle_error "No setup directory was provided."
     fi
-    END
+    (( $? != 0 )) && return $?
 
     # 
-    # Validate provided directory:
-    local dir="$1"
-    echo "testttt"
+    # Validate provided directory
+    local dir=$(get_absolute_path "$1")
+    if ! is_valid_directory $dir; then
+        handle_error "Provided directory is not valid."
+    fi
+    (( $? != 0 )) && return $?
+    
 }
 
 
@@ -84,6 +89,7 @@ function dequeue() {
     # Do NOT remove next line!
     echo "function pop dequeue"
     #############################################
+    echo $ENCRYPTED
 
     #
     # Checking provided arguments
@@ -149,6 +155,8 @@ function main() {
     # Do NOT remove next line!
     echo "function main"
 
+    check_configuration $CONFIG_FILE
+
 
     # If there are no arguments/options then only run install method
     if [[ $# -eq 0 ]]; then
@@ -175,10 +183,80 @@ function main() {
     fi
 }
 
-# Helper functions
-#
+
+####################
+# Helper functions #
+####################
+function get_absolute_path() {
+    local path="$1"
+    # If path doesn't start with / treat as relative path
+    [[ "$path" != /* ]] && path="$(pwd)/$path"
+
+    # remove trailing slash if present
+    echo "${path%/}"
+}
+
+###################
+# Check functions #
+###################
+
+# Check all -> Ensures commands can run without issues.
+function check_all() {
+    check_configuration
+}
+
+# Checks whether configuration file exists and has proper values.
+function check_configuration() {
+    if ! is_valid_file $CONFIG_FILE; then
+        handle_error "Configuration file does not exist, or lacks proper permissions."
+    elif ! is_valid_config $CONFIG_FILE; then
+        handle_error "Configuration file has been corrupted."
+    fi
+}
+
+# Checks whether vault exists (directory and the queue)
+# function check_vault() {
+
+# }
+
+# Checks whether any program dependencies are missing.
+# function check_program_dependencies() {
+
+# }
 
 
+
+########################
+# Validation functions #
+########################
+is_valid_entry() { [[ -e "$1" && -r "$1" && -w "$1" && ( -f "$1" || -d "$1" ) ]]; } # Checks whether entry exists and read/write permissions, AND whether entry is a file or directory.
+is_valid_file() { is_valid_entry "$1" && [[ -f "$1" ]]; } # Checks whether entry is a file
+is_valid_directory() { is_valid_entry "$1" && [[ -d "$1" ]]; } # Checks whether entry is a directory
+
+function is_valid_config()
+{
+    local encrypted=$(grep "^ENCRYPTED=" "$1" | cut -d '=' -f2)
+    local vault_path=$(grep "^VAULT_PATH=" "$1" | cut -d '=' -f2)
+    
+    # Validate ENCRYPTED value
+    if [[ "$encrypted" != "true" && "$encrypted" != "false" ]]; then
+        return 1
+    fi
+
+    # Validate VAULT_PATH
+    if ! is_valid_directory "$vault_path"; then
+        return 1
+    fi
+
+    return 0
+}
+
+
+###
+###
+###
+###
+###
 
 # Do NOT remove next line!
 main "$@"
