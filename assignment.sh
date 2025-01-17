@@ -3,8 +3,13 @@
 # Yusuf Bedelci (1051250)
 # Written and tested on Debian 11.6.0
 
+# Notes to self:
+# (( $? != 0 )) && return $? # ends rest of function in one-line.
+
+
 # Global variables
 # TODO Define (only) the variables which require global scope
+ENCRYPTED=0
 
 
 # INSTALL
@@ -16,6 +21,22 @@ function install() {
 
     # TODO if something goes wrong then call function handle_error
     aqueue() { enqueue "$@"; }
+    apqueue() { enqueue -p "$@"; }
+    adequeue() { dequeue "$@"; }
+    apdequeue() { dequeue -p "$@"; }
+    assignment() {
+        case "$1" in
+            --uninstall)
+                uninstall
+                ;;
+            --setup)
+                setup "$2"
+                ;;
+            *)
+                echo "Invalid option: $1"
+                ;;
+        esac
+    }
 }
 
 
@@ -25,16 +46,18 @@ function install() {
 function setup() {
     # Do NOT remove next line!
     echo "function setup"
+    #############################################
+
+    #
+    # Checking provided arguments
+    if [[ -z "$1" ]]; then
+        handle_error "No setup directory was provided."
+    fi
+    (( $? != 0 )) && return $?
 
     # 
     # Validate provided directory:
-    # - check if an argument is even provided
-    # - check if the provided argument is an existing directory AND has the proper rights
-    # - 
     local dir="$1"
-    if [[ -z $dir ]]; then
-        handle_error "No setup directory was provided."
-    fi
 }
 
 
@@ -50,7 +73,7 @@ function handle_error() {
     echo "ERROR: $1"
 
     # TODO exit this function with a proper integer value.
-    exit 1
+    return 1
 
 }
 
@@ -58,21 +81,18 @@ function handle_error() {
 function dequeue() {
     # Do NOT remove next line!
     echo "function pop dequeue"
+    #############################################
 
     #
-    # Validate provided entry
-    if [[ $1 == "-p" ]]; then
-        local entry="$2"
-    else
-        local entry="$1"
-    fi
+    # Checking provided arguments
+    check_queue_arguments $@
+    (( $? != 0 )) && return $?
 
-    if [[ -z $entry ]]; then
-        handle_error "No entry was provided."
-    fi
+    local entry="${@: -1}" # takes the last argument (which is always entry)
 
     #
-    # ...
+    # Validating entry
+    
 
 }
 
@@ -80,25 +100,28 @@ function dequeue() {
 function enqueue {
     # Do NOT remove next line!
     echo "function rollback_spigotserver enqueue"
-
-    if [[ -z "$1" ]]; then
-        handle_error "No entry was provided"
-    fi
+    #############################################
 
     #
-    # Validate provided entry
-    if [[ $1 == "-p" ]]; then
-        local entry="$2"
-    else
-        local entry="$1"
+    # Checking provided arguments
+    if [[ $# -eq 0 ]]; then
+        handle_error "No arguments provided."
+    elif [[ $# -gt 2 ]]; then
+        handle_error "Too many arguments provided."
+    elif [[ $# -eq 2 && $1 != "-p" ]]; then
+        handle_error "Invalid argument: $1"
+    elif [[ "${@: -1}" == "-p" ]]; then
+        handle_error "Entry cannot be -p"
     fi
+    (( $? != 0 )) && return $?
 
-    if [[ -z $entry ]]; then
-        handle_error "No entry was provided."
-    fi
+    [[ $# -eq 2 && $1 == "-p" ]] && ENCRYPTED=1 # if -p povided reset encryption setting
+    
 
     #
-    # ...
+    # Validating entry
+    local entry="${@: -1}" # takes the last argument (which is always entry)
+
 }
 
 
@@ -139,18 +162,10 @@ function main() {
                 setup "$2"
                 ;;
             enqueue)
-                if [[ "$2" == "-p" ]]; then
-                    enqueue -p "$3"
-                else
-                    enqueue "$2"
-                fi
+                enqueue "$2" "$3"
                 ;;
             dequeue)
-                if [[ "$2" == "-p" ]]; then
-                    dequeue -p "$3"
-                else
-                    dequeue "$2"
-                fi
+                dequeue "$2" "$3"
                 ;;
             *)
                 echo "Unknown command: $1"
@@ -159,11 +174,10 @@ function main() {
     fi
 }
 
-# Aliases for sourced commands
+# Helper functions
+#
 
-# apqueue() { main enqueue -p "$@"; }
-# adequeue() { main dequeue "$@"; }
-# apdequeue() { main dequeue -p "$@"; }
+
 
 # Do NOT remove next line!
 main "$@"
