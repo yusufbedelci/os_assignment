@@ -34,7 +34,7 @@ function install() {
     # Validate new vault path
     local parent_dir=$(dirname "$VAULT_PATH")
     if ! is_valid_directory $parent_dir; then
-        handle_error "Installation failed: parent directory doesn't exist or no permissions."
+        handle_error "Installation failed: parent directory doesn't exist or no permissions to read/write."
     elif [[ -e $VAULT_PATH ]]; then
         handle_error "Installation failed: vault already exists or chosen directory already in use."
     fi
@@ -42,10 +42,12 @@ function install() {
 
     #
     # Create vault and contents
-    mkdir "$VAULT_PATH"
+    mkdir -p "$VAULT_PATH"
     echo "almost nothing" > "$VAULT_PATH/nothing.txt"
-    tar -czf "$VAULT_PATH/archive.vault" "$VAULT_PATH/nothing.txt"
-    echo "" > "$VAULT_PATH/queue.vault"
+
+    tar -cf "$VAULT_PATH/archive.vault" -C "$VAULT_PATH" "nothing.txt"
+    rm "$VAULT_PATH/nothing.txt"
+    touch "$VAULT_PATH/queue.vault"
 
     #
     # Create or overwrite the configuration file in $HOME.
@@ -86,7 +88,7 @@ function setup() {
 
     local parent_dir=$(dirname "$new_vault")
     if ! is_valid_directory $parent_dir; then
-        handle_error "Setup failed: parent directory doesn't exist or no permissions."
+        handle_error "Setup failed: parent directory doesn't exist or no permissions to read/write."
     fi
     (( $? != 0 )) && return $?
 
@@ -130,24 +132,78 @@ function dequeue() {
     # Do NOT remove next line!
     echo "function pop dequeue"
     #############################################
+    read_configs
 
     #
     # Checking provided arguments
-    (( $# > 1 )) && handle_error "Too many arguments provided."
-    (( $# == 1)) && [[ $1 != "-p" ]] && handle_error "Invalid option: $1"
+    if [[ $# -gt 1 ]]; then
+        handle_error "Too many arguments provided."
+        return $?
+    elif [[ $# -eq 1 ]]; then
+        if [[ "$1" != "-p" ]]; then
+            handle_error "Invalid option: $1"
+            return $?
+        else
+            ENCRYPTED="true"
+        fi
+    fi
+
+    #
+    # Check if there is anything left to dequeue
+    if [[ ! -s "$VAULT_PATH/queue.vault" ]]; then
+        handle_error "No entry left to dequeue"
+    fi
     (( $? != 0 )) && return $?
 
-    [[ $# == 1 && $1 == "p" ]] && ENCRYPTED="true"
+    #
+    # Decrypt archive (if encrypted)
+    if [[ "$ENCRYPTED" == "true" ]]; then
+        gpg --decrypt --output "$VAULT_PATH/archive.temp" "$VAULT_PATH/archive.vault" || handle_error "Failed to decrypt the archive."
+        (( $? != 0 )) && return $?
+        mv "$VAULT_PATH/archive.temp" "$VAULT_PATH/archive.vault"
+    fi
 
     #
     # Dequeue item
+    local entry=$(head -n 1 "$VAULT_PATH/queue.vault")
+    sed -i '1d' "$VAULT_PATH/queue.vault"
+    tar -xf "$VAULT_PATH/archive.vault" "$entry"
+    tar --delete -f "$VAULT_PATH/archive.vault" "$entry"
 
+    #
+    # Add back nothing.txt in case archive is empty.
+    if [[ -z $(tar -tf "$VAULT_PATH/archive.vault") ]]; then
+        echo "almost nothing" > "$VAULT_PATH/nothing.txt"
+        tar -cf "$VAULT_PATH/archive.vault" -C "$VAULT_PATH" "nothing.txt"
+        rm "$VAULT_PATH/nothing.txt"
+    fi
+
+    #
+    # Encrypt archive (if encryption enabled)
+    if [[ "$ENCRYPTED" == "true" ]]; then
+        gpg --symmetric --cipher-algo AES256 --output "$VAULT_PATH/archive.temp" "$VAULT_PATH/archive.vault" || handle_error "Failed to encrypt the archive."
+        (( $? != 0 )) && return $?
+        mv "$VAULT_PATH/archive.temp" "$VAULT_PATH/archive.vault"
+        echo -e "ENCRYPTED=true\nVAULT_PATH=$VAULT_PATH/" > $CONFIG_FILE
+    fi
+
+    #
+    # Finish dequeue
+    echo "Successfully dequeued: $entry"
+    return 0
 }
 
 function enqueue {
     # Do NOT remove next line!
     echo "function rollback_spigotserver enqueue"
     #############################################
+
+    #
+    # Run checks and read configs
+    read_configs
+    check_all
+    (( $? != 0 )) && return $?
+    read_configs
 
     #
     # Checking provided arguments
@@ -162,13 +218,68 @@ function enqueue {
     fi
     (( $? != 0 )) && return $?
 
-    [[ $# -eq 2 && $1 == "-p" ]] && ENCRYPTED="true" # if -p povided reset encryption setting
+    local newly_encrypted="false"
+    [[ $# -eq 2 && $1 == "-p" ]] && newly_encrypted="true" # if -p povided reset encryption setting
     
 
     #
     # Validating entry
-    local entry="${@: -1}" # takes the last argument (which is always entry)
+    local entry=$(get_absolute_path "${@: -1}") # takes the last argument (which is always entry)
+    if ! is_valid_entry "$entry"; then
+        handle_error "$entry does not exist or no permissions to read/write."
+    fi
+    (( $? != 0 )) && return $?
 
+    #
+    # Check if entry with the same name already exists
+    local entry_basename=$(basename "$entry")
+    if grep -q "^$entry_basename$" "$VAULT_PATH/queue.vault"; then
+        handle_error "Enqueue failed: An entry with the same name is already in the queue."
+    fi
+    (( $? != 0 )) && return $?
+    if tar -tf "$VAULT_PATH/archive.vault" | grep -q "^$entry_basename$"; then
+        handle_error "Enqueue failed: An entry with the same name is already in the archive."
+    fi
+    (( $? != 0 )) && return $?
+
+    #
+    # Decrypt archive (if encryptyed)
+    if [[ "$ENCRYPTED" == "true" ]]; then
+        gpg --decrypt --output "$VAULT_PATH/archive.temp" "$VAULT_PATH/archive.vault" || handle_error "Failed to decrypt the archive."
+        (( $? != 0 )) && return $?
+        mv "$VAULT_PATH/archive.temp" "$VAULT_PATH/archive.vault"
+    fi
+
+    #
+    # Enqueueing entry
+    echo $(basename "$entry") >> "$VAULT_PATH/queue.vault"
+    tar -rf "$VAULT_PATH/archive.vault" -C "$(dirname "$entry")" "$entry_basename"
+
+    #
+    # Remove nothing.txt if it still exists
+    if tar -tf "$VAULT_PATH/archive.vault" | grep -q "nothing.txt"; then
+        tar --delete -f "$VAULT_PATH/archive.vault" "nothing.txt"
+    fi
+    clean_queue
+
+    #
+    # Encrypt archive (if encryption enables)
+    if [[ "$ENCRYPTED" == "true" || "$newly_encrypted" == "true" ]]; then
+        gpg --symmetric --cipher-algo AES256 --output "$VAULT_PATH/archive.temp" "$VAULT_PATH/archive.vault" || handle_error "Failed to encrypt the archive."
+        (( $? != 0 )) && return $?
+        mv "$VAULT_PATH/archive.temp" "$VAULT_PATH/archive.vault"
+        echo -e "ENCRYPTED=true\nVAULT_PATH=$VAULT_PATH/" > $CONFIG_FILE
+    fi
+
+    #
+    # Finish enqueue
+    echo "Successfully enqueued: $entry"
+    return 0
+}
+
+function clean_queue {
+    # remove any empty lines from the queue.vault file
+    sed -i '/^$/d' "$VAULT_PATH/queue.vault"
 }
 
 
@@ -256,7 +367,6 @@ function get_absolute_path() {
     local path="$1"
     # If path doesn't start with / treat as relative path
     [[ "$path" != /* ]] && path="$(pwd)/$path"
-
     # remove trailing slash if present
     echo "${path%/}"
 }
@@ -264,29 +374,33 @@ function get_absolute_path() {
 ###################
 # Check functions #
 ###################
-# Check all -> Ensures commands can run without issues.
 function check_all() {
     check_configuration
+    check_vault
+    if [[ $? != 0 ]]; then
+        echo "WARNING: essential files and/or directories are missing, consider manual fix or reinstall the vault."
+    fi
 }
 
 # Checks whether configuration file exists and has proper values.
 function check_configuration() {
-    if ! is_valid_file $CONFIG_FILE; then
-        handle_error "Configuration file does not exist or no permissions."
-    elif ! is_valid_config $CONFIG_FILE; then
+    if ! is_valid_file "$CONFIG_FILE"; then
+        handle_error "Configuration file does not exist or no permissions to read/write."
+    elif ! is_valid_config "$CONFIG_FILE"; then
         handle_error "Configuration file has been corrupted."
     fi
 }
 
-# Checks whether vault exists (directory and the queue)
-# function check_vault() {
-
-# }
-
-# Checks whether any program dependencies are missing.
-# function check_program_dependencies() {
-
-# }
+# Checks whether vault exists (with its contents)
+function check_vault() {
+    if ! is_valid_directory "$VAULT_PATH"; then
+        handle_error "Vault (at $VAULT_PATH) does not exist or no permissions to read/write."
+    elif ! is_valid_file "$VAULT_PATH/queue.vault"; then
+        handle_error "queue.vault does not exist or no permissions to read/write."
+    elif ! is_valid_file "$VAULT_PATH/archive.vault"; then
+        handle_error "archive.vault does not exist or no permissions to read/write."
+    fi
+}
 
 
 
