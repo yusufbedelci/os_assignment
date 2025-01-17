@@ -15,6 +15,7 @@ function install() {
     echo "function install"
 
     # TODO if something goes wrong then call function handle_error
+    aqueue() { enqueue "$@"; }
 }
 
 
@@ -25,7 +26,15 @@ function setup() {
     # Do NOT remove next line!
     echo "function setup"
 
-    # TODO if something goes wrong then call function handle_error
+    # 
+    # Validate provided directory:
+    # - check if an argument is even provided
+    # - check if the provided argument is an existing directory AND has the proper rights
+    # - 
+    local dir="$1"
+    if [[ -z $dir ]]; then
+        handle_error "No setup directory was provided."
+    fi
 }
 
 
@@ -38,7 +47,10 @@ function handle_error() {
     echo "function handle_error"
 
     # TODO print a specific error message
+    echo "ERROR: $1"
+
     # TODO exit this function with a proper integer value.
+    exit 1
 
 }
 
@@ -47,7 +59,20 @@ function dequeue() {
     # Do NOT remove next line!
     echo "function pop dequeue"
 
-    # TODO if something goes wrong then call function handle_error
+    #
+    # Validate provided entry
+    if [[ $1 == "-p" ]]; then
+        local entry="$2"
+    else
+        local entry="$1"
+    fi
+
+    if [[ -z $entry ]]; then
+        handle_error "No entry was provided."
+    fi
+
+    #
+    # ...
 
 }
 
@@ -56,7 +81,24 @@ function enqueue {
     # Do NOT remove next line!
     echo "function rollback_spigotserver enqueue"
 
-    # TODO if something goes wrong then call function handle_error
+    if [[ -z "$1" ]]; then
+        handle_error "No entry was provided"
+    fi
+
+    #
+    # Validate provided entry
+    if [[ $1 == "-p" ]]; then
+        local entry="$2"
+    else
+        local entry="$1"
+    fi
+
+    if [[ -z $entry ]]; then
+        handle_error "No entry was provided."
+    fi
+
+    #
+    # ...
 }
 
 
@@ -73,11 +115,55 @@ function uninstall() {
 
 
 function main() {
+    # I designed the main function to handle the commands users run.
+    # If the user runs a proper command the respective functionality will be run.
+    # If there is an mistake in the written command or there are missing arguments, the user is informed about it.
+    # I do not consider these to be "errors" but rather improper syntax.
+    # It is only evaluating whether the proper syntax is used, not validate the actual input.
+    # Hence these mistakes are not handled through handle_error centrally yet.
+
     # Do NOT remove next line!
     echo "function main"
 
 
+    # If there are no arguments/options then only run install method
+    if [[ $# -eq 0 ]]; then
+        install
+    else
+        # Parsing the commands and their options
+        case "$1" in
+            --uninstall)
+                uninstall
+                ;;
+            --setup)
+                setup "$2"
+                ;;
+            enqueue)
+                if [[ "$2" == "-p" ]]; then
+                    enqueue -p "$3"
+                else
+                    enqueue "$2"
+                fi
+                ;;
+            dequeue)
+                if [[ "$2" == "-p" ]]; then
+                    dequeue -p "$3"
+                else
+                    dequeue "$2"
+                fi
+                ;;
+            *)
+                echo "Unknown command: $1"
+                ;;
+        esac
+    fi
 }
+
+# Aliases for sourced commands
+
+# apqueue() { main enqueue -p "$@"; }
+# adequeue() { main dequeue "$@"; }
+# apdequeue() { main dequeue -p "$@"; }
 
 # Do NOT remove next line!
 main "$@"
