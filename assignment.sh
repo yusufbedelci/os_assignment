@@ -11,15 +11,15 @@
 # TODO Define (only) the variables which require global scope
 ENCRYPTED=0
 
-
-# INSTALL
-
-# TODO complete the implementation of this function
+###########
+# INSTALL #
+###########
 function install() {
     # Do NOT remove next line!    
     echo "function install"
+    #############################################
 
-    # TODO if something goes wrong then call function handle_error
+    # Load bash functions
     aqueue() { enqueue "$@"; }
     apqueue() { enqueue -p "$@"; }
     adequeue() { dequeue "$@"; }
@@ -39,10 +39,9 @@ function install() {
     }
 }
 
-
-# CONFIGURATION
-
-# TODO complete the implementation of this function
+#################
+# CONFIGURATION #
+#################
 function setup() {
     # Do NOT remove next line!
     echo "function setup"
@@ -53,18 +52,18 @@ function setup() {
     if [[ -z "$1" ]]; then
         handle_error "No setup directory was provided."
     fi
-    (( $? != 0 )) && return $?
+    END
 
     # 
     # Validate provided directory:
     local dir="$1"
+    echo "testttt"
 }
 
 
-
-# ERROR HANDLING
-
-# TODO complete the implementation of this function
+##################
+# ERROR HANDLING #
+##################
 function handle_error() {
     # Do NOT remove next line!
     echo "function handle_error"
@@ -77,7 +76,10 @@ function handle_error() {
 
 }
 
-# TODO complete the implementation of this function
+
+############
+# QUEUEING #
+############
 function dequeue() {
     # Do NOT remove next line!
     echo "function pop dequeue"
@@ -85,18 +87,17 @@ function dequeue() {
 
     #
     # Checking provided arguments
-    check_queue_arguments $@
+    (( $# > 1 )) && handle_error "Too many arguments provided."
+    (( $# == 1)) && [[ $1 != "-p" ]] && handle_error "Invalid option: $1"
     (( $? != 0 )) && return $?
 
-    local entry="${@: -1}" # takes the last argument (which is always entry)
+    [[ $# == 1 && $1 == "p" ]] && ENCRYPTED=1 
 
     #
-    # Validating entry
-    
+    # Dequeue item
 
 }
 
-# TODO complete the implementation of this function
 function enqueue {
     # Do NOT remove next line!
     echo "function rollback_spigotserver enqueue"
@@ -109,7 +110,7 @@ function enqueue {
     elif [[ $# -gt 2 ]]; then
         handle_error "Too many arguments provided."
     elif [[ $# -eq 2 && $1 != "-p" ]]; then
-        handle_error "Invalid argument: $1"
+        handle_error "Invalid option: $1"
     elif [[ "${@: -1}" == "-p" ]]; then
         handle_error "Entry cannot be -p"
     fi
@@ -162,10 +163,10 @@ function main() {
                 setup "$2"
                 ;;
             enqueue)
-                enqueue "$2" "$3"
+                enqueue "${@:2}" # removes "enqueue" argument
                 ;;
             dequeue)
-                dequeue "$2" "$3"
+                dequeue "${@:2}"
                 ;;
             *)
                 echo "Unknown command: $1"
