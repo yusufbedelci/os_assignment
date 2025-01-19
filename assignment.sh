@@ -60,7 +60,7 @@ function install() {
 
     #
     # Create or overwrite the configuration file in $HOME.
-    echo -e "ENCRYPTED=false\nVAULT_PATH=$VAULT_PATH/" > $CONFIG_FILE
+    echo -e "ENCRYPTED=false\nVAULT_PATH=$(realpath --no-symlinks "$VAULT_PATH")" > $CONFIG_FILE
 
     #
     # Finish installation.
@@ -106,6 +106,7 @@ function setup() {
     # Validate provided directory location
     local new_vault=$(get_absolute_path "$1")
     local parent_dir=$(dirname "$new_vault")
+
     if ! is_valid_directory $parent_dir; then
         handle_error "Setup failed: parent directory doesn't exist or no permissions to read/write."
     elif [[ -e $new_vault ]]; then
@@ -119,6 +120,7 @@ function setup() {
     
     #
     # Finish setup.
+    read_configuration
     success_message "Setup successful: vault moved from $VAULT_PATH to $new_vault"
     return 0
 }
@@ -126,6 +128,7 @@ function setup() {
 function read_configuration() {
     ENCRYPTED=$(grep "^ENCRYPTED=" "$CONFIG_FILE" | cut -d '=' -f2)
     VAULT_PATH=$(grep "^VAULT_PATH=" "$CONFIG_FILE" | cut -d '=' -f2)
+    VAULT_PATH=$(realpath --no-symlinks "$VAULT_PATH")
 }
 
 
@@ -158,14 +161,13 @@ function rollback() { delete_temps; }
 ######################
 function create_temps() {
     mkdir -p "$TMP_VAULT"
-    cp -r "$VAULT_PATH" "$TMP_VAULT/vault"
+    cp -r "$VAULT_PATH" "$TMP_VAULT"
     cp "$CONFIG_FILE" "$TMP_VAULT/vault.conf"
 }
 
 function save_temps() {
-    mv "$TMP_VAULT/vault" "$VAULT_PATH"
-    mv "$TMP_VAULT/vault.conf" "$CONFIG_FILE"
-    delete_temps
+    rm -rf "$VAULT_PATH"; mv "$TMP_VAULT/vault" "$VAULT_PATH"
+    rm "$CONFIG_FILE"; mv "$TMP_VAULT/vault.conf" "$CONFIG_FILE"
 }
 
 function delete_temps() { rm -rf "$TMP_VAULT"; }
@@ -197,32 +199,32 @@ function dequeue() {
 
     #
     # Check whether encrypted archive is being accessed without -p
-    if [[ $# -eq 0 ]] && is_encrypted "$TMP_VAULT/archive.vault"; then
+    if [[ $# -eq 0 ]] && is_encrypted "$TMP_VAULT/vault/archive.vault"; then
         handle_error "An encrypted archive cannot be accessed with this command!"
     fi
 
     #
     # Check if there is anything left to dequeue
-    if [[ ! -s "$TMP_VAULT/queue.vault" ]]; then
+    if [[ ! -s "$TMP_VAULT/vault/queue.vault" ]]; then
         handle_error "No entry left to dequeue"
     fi
 
     #
     # Decrypt archive (if encrypted)
-    is_encrypted "$TMP_VAULT/archive.vault" && decrypt_archive
+    is_encrypted "$TMP_VAULT/vault/archive.vault" && decrypt_archive
 
     #
     # Dequeue item
-    local entry=$(head -n 1 "$TMP_VAULT/queue.vault") || handle_error "Dequeue failed: could not read an entry from queue."
-    sed -i '1d' "$TMP_VAULT/queue.vault" || handle_error "Dequeue failed: could not update queue."
-    tar -xf "$TMP_VAULT/archive.vault" "$entry" || handle_error "Dequeue failed: could not extract entry from archive."
-    tar --delete -f "$TMP_VAULT/archive.vault" "$entry" || handle_error "Dequeue failed: could not delete entry from archive."
+    local entry=$(head -n 1 "$TMP_VAULT/vault/queue.vault") || handle_error "Dequeue failed: could not read an entry from queue."
+    sed -i '1d' "$TMP_VAULT/vault/queue.vault" || handle_error "Dequeue failed: could not update queue."
+    tar -xf "$TMP_VAULT/vault/archive.vault" "$entry" || handle_error "Dequeue failed: could not extract entry from archive."
+    tar --delete -f "$TMP_VAULT/vault/archive.vault" "$entry" || handle_error "Dequeue failed: could not delete entry from archive."
 
     #
     # Add back nothing.txt in case archive is empty.
-    if [[ -z $(tar -tf "$TMP_VAULT/archive.vault") ]]; then
+    if [[ -z $(tar -tf "$TMP_VAULT/vault/archive.vault") ]]; then
         echo "almost nothing" > "$TMP_VAULT/nothing.txt"
-        tar -cf "$TMP_VAULT/archive.vault" -C "$TMP_VAULT" "nothing.txt" || handle_error "Dequeue failed: could not add nothing.txt file."
+        tar -cf "$TMP_VAULT/vault/archive.vault" -C "$TMP_VAULT" "nothing.txt" || handle_error "Dequeue failed: could not add nothing.txt file."
         rm "$TMP_VAULT/nothing.txt"
     fi
 
@@ -273,27 +275,28 @@ function enqueue {
     fi
     
     #
+    # Decrypt archive (if encryptyed)
+    is_encrypted "$TMP_VAULT/vault/archive.vault" && decrypt_archive
+
+    #
     # Check if entry with the same name already exists
     local entry_basename=$(basename "$entry")
-    if grep -q "^$entry_basename$" "$TMP_VAULT/queue.vault" || tar -tf "$TMP_VAULT/archive.vault" | grep -q "^$entry_basename$"; then
+    if grep -q "^$entry_basename$" "$TMP_VAULT/vault/queue.vault" || tar -tf "$TMP_VAULT/vault/archive.vault" | grep -q "^$entry_basename$"; then
         handle_error "Enqueue failed: An entry with the same name is already archived."
     fi
 
-    #
-    # Decrypt archive (if encryptyed)
-    is_encrypted "$TMP_VAULT/archive.vault" && decrypt_archive
 
     #
     # Enqueueing entry
-    echo $(basename "$entry") >> "$TMP_VAULT/queue.vault"
-    tar -rf "$TMP_VAULT/archive.vault" -C "$(dirname "$entry")" "$entry_basename" || handle_error "Enqueue failed: could not add item to archive."
+    echo $(basename "$entry") >> "$TMP_VAULT/vault/queue.vault"
+    tar -rf "$TMP_VAULT/vault/archive.vault" -C "$(dirname "$entry")" "$entry_basename" || handle_error "Enqueue failed: could not add item to archive."
 
     #
     # Remove nothing.txt if it still exists and remove any empty lines from the queue.vault
-    if tar -tf "$TMP_VAULT/archive.vault" | grep -q "nothing.txt"; then
-        tar --delete -f "$TMP_VAULT/archive.vault" "nothing.txt" || handle_error "Enqueue failed: could not remove nothing.txt from archive."
+    if tar -tf "$TMP_VAULT/vault/archive.vault" | grep -q "nothing.txt"; then
+        tar --delete -f "$TMP_VAULT/vault/archive.vault" "nothing.txt" || handle_error "Enqueue failed: could not remove nothing.txt from archive."
     fi
-    sed -i '/^$/d' "$TMP_VAULT/queue.vault"
+    sed -i '/^$/d' "$TMP_VAULT/vault/queue.vault"
 
     #
     # Encrypt archive (if encryption enabled)
@@ -310,14 +313,32 @@ function enqueue {
 # ENCRYPTION #
 ##############
 function encrypt_archive() {
-    gpg --symmetric --cipher-algo AES256 --output "$TMP_VAULT/archive.temp" "$TMP_VAULT/archive.vault" || handle_error "Failed to encrypt the archive."
-    mv "$TMP_VAULT/archive.temp" "$TMP_VAULT/archive.vault"
-    echo -e "ENCRYPTED=true\nVAULT_PATH=$VAULT_PATH/" > $TMP_VAULT/vault.conf
+    local password
+    echo -n "Enter passphrase for encryption: "
+    read -s password
+    echo
+
+    echo "$password" | gpg --batch --yes --symmetric --cipher-algo AES256 \
+        --passphrase-fd 0 \
+        --output "$TMP_VAULT/archive.temp" \
+        "$TMP_VAULT/vault/archive.vault" || handle_error "Failed to encrypt the archive."
+
+    mv "$TMP_VAULT/archive.temp" "$TMP_VAULT/vault/archive.vault"
+    echo -e "ENCRYPTED=true\nVAULT_PATH=$(realpath --no-symlinks "$VAULT_PATH")" > $TMP_VAULT/vault.conf
 }
 
 function decrypt_archive() {
-    gpg --decrypt --output "$TMP_VAULT/archive.temp" "$TMP_VAULT/archive.vault" || handle_error "Failed to decrypt the archive."
-    mv "$TMP_VAULT/archive.temp" "$TMP_VAULT/archive.vault"
+    local password
+    echo -n "Enter passphrase for decryption: "
+    read -s password
+    echo
+
+    echo "$password" | gpg --batch --yes --decrypt \
+        --passphrase-fd 0 \
+        --output "$TMP_VAULT/archive.temp" \
+        "$TMP_VAULT/vault/archive.vault" || handle_error "Failed to decrypt the archive."
+
+    mv "$TMP_VAULT/archive.temp" "$TMP_VAULT/vault/archive.vault"
 }
 
 
@@ -332,8 +353,8 @@ function get_absolute_path() {
     echo "${path%/}"
 }
 
-error_message() { echo -e "\e[1;31mERROR|\e[0m " "$1"; }
-success_message() { echo -e "\e[1;32mSUCCESS|\e[0m " "$1"; }
+error_message() { echo -e "\e[1;31mERROR |\e[0m " "$1"; }
+success_message() { echo -e "\e[1;32mSUCCESS |\e[0m " "$1"; }
 
 
 ###################
@@ -372,7 +393,7 @@ function check_vault() {
 is_valid_entry() { [[ -e "$1" && -r "$1" && -w "$1" && ( -f "$1" || -d "$1" ) ]]; } # Checks whether entry exists and read/write permissions, AND whether entry is a file or directory.
 is_valid_file() { is_valid_entry "$1" && [[ -f "$1" ]]; } # Checks whether entry is a file
 is_valid_directory() { is_valid_entry "$1" && [[ -d "$1" ]]; } # Checks whether entry is a directory
-is_encrypted() { "$(file --mime-type -b "$1")" == "application/pgp-encrypted" ;}
+is_encrypted() { [[ "$(file --mime-type -b "$1")" != "application/x-tar" ]];}
 
 function is_valid_config()
 {
