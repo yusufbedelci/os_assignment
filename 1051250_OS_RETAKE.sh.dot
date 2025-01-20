@@ -81,6 +81,14 @@ function uninstall() {
     # Delete vault (and contents) and config file
     rm -rf "$VAULT_PATH"
     rm -f "$CONFIG_FILE"
+    rm -rf "$TMP_VAULT"
+
+    #
+    # Exit to delete all sourced functions
+    echo "============================"
+    success_message "Uninstallation complete, shell will be exited in 5 seconds."
+    sleep 5
+    exit 0
 }
 
 #################
@@ -99,8 +107,9 @@ function setup() {
 
     #
     # Run checks and read configs
-    check_all
+    check_configuration
     read_configuration
+    check_vault
 
     # 
     # Validate provided directory location
@@ -116,11 +125,10 @@ function setup() {
     #
     # Move vault to new location and update config file
     mv "$VAULT_PATH" "$new_vault"
-    echo -e "ENCRYPTED=$ENCRYPTED\nVAULT_PATH=$new_vault/" > $CONFIG_FILE
+    echo -e "ENCRYPTED=$ENCRYPTED\nVAULT_PATH=$new_vault" > $CONFIG_FILE
     
     #
     # Finish setup.
-    read_configuration
     success_message "Setup successful: vault moved from $VAULT_PATH to $new_vault"
     return 0
 }
@@ -161,13 +169,14 @@ function rollback() { delete_temps; }
 ######################
 function create_temps() {
     mkdir -p "$TMP_VAULT"
-    cp -r "$VAULT_PATH" "$TMP_VAULT"
+    cp -r "$VAULT_PATH" "$TMP_VAULT/vault"
     cp "$CONFIG_FILE" "$TMP_VAULT/vault.conf"
 }
 
 function save_temps() {
     rm -rf "$VAULT_PATH"; mv "$TMP_VAULT/vault" "$VAULT_PATH"
     rm "$CONFIG_FILE"; mv "$TMP_VAULT/vault.conf" "$CONFIG_FILE"
+    delete_temps
 }
 
 function delete_temps() { rm -rf "$TMP_VAULT"; }
@@ -193,8 +202,9 @@ function dequeue() {
 
     #
     # Run checks, read configs and create temporary files
-    check_all
+    check_configuration
     read_configuration
+    check_vault
     create_temps
 
     #
@@ -258,14 +268,21 @@ function enqueue {
 
     #
     # Run checks, read configs and create temporary files
-    check_all
+    check_configuration
     read_configuration
+    check_vault
     create_temps
+
+    #
+    # Check if -p not supplied when archive is encrypted
+    if [[ $1 != "-p" ]] && is_encrypted "$TMP_VAULT/vault/archive.vault"; then
+        handle_error "Cannot use this command for an encrypted archive!"
+    fi
 
     #
     # If -p is provided set newly_encrypted var for reseting encryption settings
     local newly_encrypted="false"
-    [[ $# -eq 2 && $1 == "-p" ]] && newly_encrypted="true"
+    [[ $# -eq 2 && $1 == "-p" ]] && newly_encrypted="true" && warning_message "Archive will now be encrypted!"
     
     #
     # Validating entry
@@ -284,7 +301,6 @@ function enqueue {
     if grep -q "^$entry_basename$" "$TMP_VAULT/vault/queue.vault" || tar -tf "$TMP_VAULT/vault/archive.vault" | grep -q "^$entry_basename$"; then
         handle_error "Enqueue failed: An entry with the same name is already archived."
     fi
-
 
     #
     # Enqueueing entry
@@ -314,14 +330,14 @@ function enqueue {
 ##############
 function encrypt_archive() {
     local password
-    echo -n "Enter passphrase for encryption: "
+    echo -n "Enter passphrase for (re-)encryption: "
     read -s password
     echo
 
     echo "$password" | gpg --batch --yes --symmetric --cipher-algo AES256 \
         --passphrase-fd 0 \
         --output "$TMP_VAULT/archive.temp" \
-        "$TMP_VAULT/vault/archive.vault" || handle_error "Failed to encrypt the archive."
+        "$TMP_VAULT/vault/archive.vault" > /dev/null 2>&1 || handle_error "Failed to encrypt the archive."
 
     mv "$TMP_VAULT/archive.temp" "$TMP_VAULT/vault/archive.vault"
     echo -e "ENCRYPTED=true\nVAULT_PATH=$(realpath --no-symlinks "$VAULT_PATH")" > $TMP_VAULT/vault.conf
@@ -336,7 +352,7 @@ function decrypt_archive() {
     echo "$password" | gpg --batch --yes --decrypt \
         --passphrase-fd 0 \
         --output "$TMP_VAULT/archive.temp" \
-        "$TMP_VAULT/vault/archive.vault" || handle_error "Failed to decrypt the archive."
+        "$TMP_VAULT/vault/archive.vault" > /dev/null 2>&1 || handle_error "Failed to decrypt the archive."
 
     mv "$TMP_VAULT/archive.temp" "$TMP_VAULT/vault/archive.vault"
 }
@@ -355,16 +371,12 @@ function get_absolute_path() {
 
 error_message() { echo -e "\e[1;31mERROR |\e[0m " "$1"; }
 success_message() { echo -e "\e[1;32mSUCCESS |\e[0m " "$1"; }
+warning_message() { echo -e "\e[1;33mWARNING |\e[0m " "$1"; }
 
 
 ###################
 # Check functions #
 ###################
-function check_all() {
-    check_configuration
-    check_vault
-}
-
 # Checks whether configuration file exists and has proper values.
 function check_configuration() {
     if ! is_valid_file "$CONFIG_FILE"; then
@@ -393,7 +405,7 @@ function check_vault() {
 is_valid_entry() { [[ -e "$1" && -r "$1" && -w "$1" && ( -f "$1" || -d "$1" ) ]]; } # Checks whether entry exists and read/write permissions, AND whether entry is a file or directory.
 is_valid_file() { is_valid_entry "$1" && [[ -f "$1" ]]; } # Checks whether entry is a file
 is_valid_directory() { is_valid_entry "$1" && [[ -d "$1" ]]; } # Checks whether entry is a directory
-is_encrypted() { [[ "$(file --mime-type -b "$1")" != "application/x-tar" ]];}
+is_encrypted() { [[ $(file "$1") =~ GPG ]];}
 
 function is_valid_config()
 {
